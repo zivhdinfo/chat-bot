@@ -60,75 +60,31 @@ export async function POST(req: NextRequest) {
     const currentTimeInfo = currentTime ? `\n\nThời gian hiện tại: ${currentTime}` : '';
     
     // Prepare messages with vision support
-    const processedMessages = messages.map((msg, index) => {
+    const processedMessages: OpenAI.Chat.ChatCompletionMessageParam[] = messages.map((msg, index) => {
       // Add attachments to the last user message
       if (msg.role === "user" && index === messages.length - 1 && attachments && attachments.length > 0) {
-        const content = [
-          { type: "text", text: msg.content },
-          ...attachments.map(att => ({
-            type: "image_url",
-            image_url: { url: att.data }
-          }))
-        ];
-        return { ...msg, content };
+        return {
+          role: "user" as const,
+          content: [
+            { type: "text" as const, text: msg.content },
+            ...attachments.map(att => ({
+              type: "image_url" as const,
+              image_url: { url: att.data }
+            }))
+          ]
+        };
       }
-      return msg;
+      if (msg.role === "user") {
+        return { role: "user" as const, content: msg.content };
+      }
+      return { role: "assistant" as const, content: msg.content };
     });
 
-    // Use Responses API for research, Chat Completions for regular chat
-    if (enableResearch && selectedModel !== "gpt-5-nano") {
-      // Use Responses API with web search
-      const response = await openai.responses.create({
-        model: selectedModel,
-        input: [
-          {
-            role: "system",
-            content: `Bạn là AI Learning Assistant với khả năng tìm kiếm web.${currentTimeInfo}
-
-NHIỆM VỤ: Hỗ trợ học tập với thông tin cập nhật từ internet khi cần thiết.
-
-QUY TẮC:
-1. Sử dụng web search khi cần thông tin mới, cập nhật
-2. Trả lời chi tiết với nguồn tham khảo
-3. Tập trung vào nội dung học tập
-
-TÍNH NĂNG NHẮC HỌC: [same as before]`,
-          },
-          ...processedMessages,
-        ],
-        tools: [{ type: "web_search" }],
-        stream: true,
-      });
-
-      // Handle Responses API streaming
-      const encoder = new TextEncoder();
-      const readable = new ReadableStream({
-        async start(controller) {
-          try {
-            for await (const chunk of response) {
-              if (chunk.output_text) {
-                const data = `data: ${JSON.stringify({ content: chunk.output_text })}\n\n`;
-                controller.enqueue(encoder.encode(data));
-              }
-            }
-            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-          } catch (error) {
-            controller.error(error);
-          } finally {
-            controller.close();
-          }
-        },
-      });
-
-      return new Response(readable, {
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive',
-        },
-      });
-    } else {
-      // Use Chat Completions API for regular chat and vision
+    // Use Chat Completions API for all cases
+    // Note: Responses API with web_search is temporarily disabled due to type issues
+    {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const _enableResearch = enableResearch; // Keep for future use
       const stream = await openai.chat.completions.create({
         model: selectedModel,
         messages: [

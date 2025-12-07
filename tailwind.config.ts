@@ -9,7 +9,7 @@ const config: Config = {
     "./src/**/*.{ts,tsx,js,jsx,mdx}",
     "./node_modules/@heroui/theme/dist/**/*.{js,ts,jsx,tsx}",
   ],
-  darkMode: ["class"],
+  darkMode: "class",
   theme: {
     extend: {},
   },

@@ -2,7 +2,7 @@
 
 import { useCallback, useState, useRef, useEffect } from "react";
 import { Toaster, toast } from "sonner";
-import { ArrowLeft, Sparkles, ChevronRight, Loader2, Search, Check, Upload, Image as ImageIcon, X, History, Trash2, Clock } from "lucide-react";
+import { ArrowLeft, Sparkles, ChevronRight, Loader2, Search, Check, Upload, Image as ImageIcon, X, History, Trash2, Clock, Send, MessageCircle } from "lucide-react";
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
@@ -43,7 +43,7 @@ import remarkGfm from "remark-gfm";
 import { ChatAppSidebar } from "@/components/chat/chat-app-sidebar";
 import { useChatSessions } from "@/hooks/use-chat-sessions";
 import { useTuViSessions } from "@/hooks/use-tuvi-sessions";
-import { TuViInfo, TuViSession, CHI_GIO, BASIC_CATEGORIES, DETAIL_CATEGORIES, GPT_MODELS } from "@/types/tuvi";
+import { TuViInfo, TuViSession, TuViChatMessage, CHI_GIO, BASIC_CATEGORIES, DETAIL_CATEGORIES, GPT_MODELS } from "@/types/tuvi";
 import { cn } from "@/lib/utils";
 
 type Step = "form" | "categories" | "result" | "history";
@@ -58,6 +58,13 @@ export default function TuViPage() {
   const [resultTitle, setResultTitle] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [currentTuViSessionId, setCurrentTuViSessionId] = useState<string | null>(null);
+
+  // Chat follow-up states
+  const [chatMessages, setChatMessages] = useState<TuViChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [isChatStreaming, setIsChatStreaming] = useState(false);
+  const chatAbortControllerRef = useRef<AbortController | null>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   // Popover states
   const [openDay, setOpenDay] = useState(false);
@@ -99,6 +106,7 @@ export default function TuViPage() {
     sessions: tuViSessions,
     createSession: createTuViSession,
     updateSessionContent,
+    updateSessionChatMessages,
     deleteSession: deleteTuViSession,
     getSession: getTuViSession,
   } = useTuViSessions();
@@ -152,13 +160,14 @@ export default function TuViPage() {
       }
     }
 
+    // Khi có ảnh, chỉ cần họ tên, các thông tin khác sẽ được AI đọc từ ảnh
     const info: TuViInfo = {
       hoTen: formData.hoTen,
-      ngaySinh: formData.ngaySinh ? parseInt(formData.ngaySinh) : 1,
-      thangSinh: formData.thangSinh ? parseInt(formData.thangSinh) : 1,
-      namSinh: formData.namSinh ? parseInt(formData.namSinh) : 2000,
-      gioSinh: formData.gioSinh || "ty",
-      gioiTinh: formData.gioiTinh,
+      ngaySinh: formData.ngaySinh ? parseInt(formData.ngaySinh) : undefined,
+      thangSinh: formData.thangSinh ? parseInt(formData.thangSinh) : undefined,
+      namSinh: formData.namSinh ? parseInt(formData.namSinh) : undefined,
+      gioSinh: formData.gioSinh || undefined,
+      gioiTinh: formData.gioiTinh || undefined,
       amLich: formData.amLich,
     };
     
@@ -322,6 +331,7 @@ export default function TuViPage() {
     setSelectedModel(session.model);
     setUploadedImage(session.image || null);
     setCurrentTuViSessionId(session.id);
+    setChatMessages(session.chatMessages || []);
     setStep("result");
   }, []);
 
@@ -353,6 +363,120 @@ export default function TuViPage() {
       minute: '2-digit',
     });
   }, []);
+
+  // Scroll to chat end
+  useEffect(() => {
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [chatMessages, isChatStreaming]);
+
+  // Xử lý gửi tin nhắn chat
+  const handleSendChatMessage = useCallback(async () => {
+    if (!chatInput.trim() || !tuViInfo || isChatStreaming) return;
+
+    const userMessage = chatInput.trim();
+    setChatInput("");
+
+    // Thêm tin nhắn user vào chat
+    setChatMessages(prev => [...prev, { role: "user", content: userMessage }]);
+
+    // Cancel request trước đó nếu có
+    if (chatAbortControllerRef.current) {
+      chatAbortControllerRef.current.abort();
+    }
+    chatAbortControllerRef.current = new AbortController();
+
+    setIsChatStreaming(true);
+
+    try {
+      const response = await fetch("/api/tuvi/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tuViInfo,
+          categoryTitle: resultTitle,
+          initialResult: resultContent,
+          conversationHistory: chatMessages,
+          userMessage,
+          model: selectedModel,
+          currentTime: getCurrentTimeString(),
+          image: uploadedImage,
+        }),
+        signal: chatAbortControllerRef.current.signal,
+      });
+
+      if (!response.ok) throw new Error("Lỗi khi gọi API");
+
+      const contentType = response.headers.get("content-type");
+      
+      if (contentType?.includes("text/event-stream")) {
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder();
+        if (!reader) throw new Error("Không thể đọc response");
+
+        let fullContent = "";
+        // Thêm placeholder cho assistant message
+        setChatMessages(prev => [...prev, { role: "assistant", content: "" }]);
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value);
+          const lines = chunk.split("\n");
+
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              const data = line.slice(6);
+              if (data === "[DONE]") continue;
+
+              try {
+                const parsed = JSON.parse(data);
+                if (parsed.content) {
+                  fullContent += parsed.content;
+                  // Cập nhật tin nhắn assistant cuối cùng
+                  setChatMessages(prev => {
+                    const newMessages = [...prev];
+                    newMessages[newMessages.length - 1] = {
+                      role: "assistant",
+                      content: fullContent,
+                    };
+                    return newMessages;
+                  });
+                }
+              } catch {
+                // Ignore parse errors
+              }
+            }
+          }
+        }
+
+        // Lưu chat messages vào session sau khi hoàn thành
+        if (fullContent && currentTuViSessionId) {
+          const updatedMessages: TuViChatMessage[] = [...chatMessages, { role: "user", content: userMessage }, { role: "assistant", content: fullContent }];
+          updateSessionChatMessages(currentTuViSessionId, updatedMessages);
+        }
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log("Chat request cancelled");
+        return;
+      }
+      console.error("Chat error:", error);
+      toast.error("Có lỗi xảy ra. Vui lòng thử lại.");
+      // Xóa tin nhắn user nếu có lỗi
+      setChatMessages(prev => prev.slice(0, -1));
+    } finally {
+      setIsChatStreaming(false);
+    }
+  }, [chatInput, tuViInfo, isChatStreaming, chatMessages, resultTitle, resultContent, selectedModel, getCurrentTimeString, uploadedImage, currentTuViSessionId, updateSessionChatMessages]);
+
+  // Reset chat khi chọn category mới
+  const handleSelectCategoryWithReset = useCallback(async (categoryId: string, subCategoryId?: string) => {
+    setChatMessages([]);
+    await handleSelectCategory(categoryId, subCategoryId);
+  }, [handleSelectCategory]);
 
   return (
     <SidebarProvider>
@@ -734,7 +858,7 @@ export default function TuViPage() {
                               key={cat.id}
                               variant="ghost"
                               className="justify-start h-auto py-3 px-3 text-left"
-                              onClick={() => handleSelectCategory(cat.id)}
+                              onClick={() => handleSelectCategoryWithReset(cat.id)}
                             >
                               <span className="mr-2">{cat.icon}</span>
                               <span className="text-sm truncate">{cat.title}</span>
@@ -761,7 +885,7 @@ export default function TuViPage() {
                                       key={item.id}
                                       variant="ghost"
                                       className="w-full justify-start h-auto py-2 px-3 text-left"
-                                      onClick={() => handleSelectCategory(cat.id, item.id)}
+                                      onClick={() => handleSelectCategoryWithReset(cat.id, item.id)}
                                     >
                                       <span className="text-xs">{item.title}</span>
                                     </Button>
@@ -809,7 +933,12 @@ export default function TuViPage() {
                                 <div className="flex-1 min-w-0">
                                   <h3 className="font-medium truncate">{session.categoryTitle}</h3>
                                   <p className="text-sm text-muted-foreground mt-1">
-                                    {session.tuViInfo.hoTen} • {session.tuViInfo.ngaySinh}/{session.tuViInfo.thangSinh}/{session.tuViInfo.namSinh}
+                                    {session.tuViInfo.hoTen}
+                                    {session.tuViInfo.ngaySinh && session.tuViInfo.thangSinh && session.tuViInfo.namSinh ? (
+                                      <> • {session.tuViInfo.ngaySinh}/{session.tuViInfo.thangSinh}/{session.tuViInfo.namSinh}</>
+                                    ) : session.image ? (
+                                      <> • <span className="text-primary">Từ ảnh lá số</span></>
+                                    ) : null}
                                   </p>
                                   <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
                                     <Clock className="h-3 w-3" />
@@ -853,7 +982,13 @@ export default function TuViPage() {
                         <h2 className="text-lg font-semibold">{resultTitle}</h2>
                         {tuViInfo && (
                           <p className="text-xs text-muted-foreground mt-1">
-                            {tuViInfo.hoTen} • {tuViInfo.ngaySinh}/{tuViInfo.thangSinh}/{tuViInfo.namSinh}
+                            {tuViInfo.hoTen}
+                            {tuViInfo.ngaySinh && tuViInfo.thangSinh && tuViInfo.namSinh && (
+                              <> • {tuViInfo.ngaySinh}/{tuViInfo.thangSinh}/{tuViInfo.namSinh}</>
+                            )}
+                            {uploadedImage && !tuViInfo.ngaySinh && (
+                              <> • <span className="text-primary">Từ ảnh lá số</span></>
+                            )}
                           </p>
                         )}
                       </div>
@@ -868,13 +1003,15 @@ export default function TuViPage() {
                     <Card>
                       <CardContent className="pt-6">
                         {resultContent ? (
-                          <div className="prose dark:prose-invert max-w-none prose-sm">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                              {resultContent}
-                            </ReactMarkdown>
-                            {isStreaming && (
-                              <span className="inline-block w-2 h-4 bg-primary animate-pulse ml-1" />
-                            )}
+                          <div className="max-h-[500px] overflow-y-auto pr-2">
+                            <div className="prose dark:prose-invert max-w-none prose-sm">
+                              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                {resultContent}
+                              </ReactMarkdown>
+                              {isStreaming && (
+                                <span className="inline-block w-2 h-4 bg-primary animate-pulse ml-1" />
+                              )}
+                            </div>
                           </div>
                         ) : (
                           <div className="flex items-center justify-center h-32">
@@ -885,13 +1022,13 @@ export default function TuViPage() {
                     </Card>
 
                     {!isStreaming && resultContent && (
-                      <div className="flex gap-2">
+                      <div className="flex gap-2 flex-wrap">
                         <Button variant="outline" onClick={handleBack}>
                           Chọn mục khác
                         </Button>
                         <Button
                           variant="outline"
-                          onClick={() => handleSelectCategory(selectedCategoryId, selectedSubCategoryId)}
+                          onClick={() => handleSelectCategoryWithReset(selectedCategoryId, selectedSubCategoryId)}
                         >
                           Luận lại
                         </Button>
@@ -902,6 +1039,79 @@ export default function TuViPage() {
                           </Button>
                         )}
                       </div>
+                    )}
+
+                    {/* Chat follow-up section */}
+                    {!isStreaming && resultContent && (
+                      <Card className="mt-6">
+                        <CardContent className="pt-4 space-y-4">
+                          <div className="flex items-center gap-2 text-sm font-medium">
+                            <MessageCircle className="h-4 w-4" />
+                            Hỏi thêm về kết quả luận giải
+                          </div>
+
+                          {/* Chat messages with scroll */}
+                          {chatMessages.length > 0 && (
+                            <div className="max-h-[300px] overflow-y-auto space-y-3 pr-2 border rounded-lg p-3 bg-muted/30">
+                              {chatMessages.map((msg, index) => (
+                                <div
+                                  key={index}
+                                  className={cn(
+                                    "p-3 rounded-lg",
+                                    msg.role === "user"
+                                      ? "bg-primary/10 ml-8"
+                                      : "bg-background mr-8 border"
+                                  )}
+                                >
+                                  <div className="text-xs text-muted-foreground mb-1">
+                                    {msg.role === "user" ? "Bạn" : "AI Tử Vi"}
+                                  </div>
+                                  <div className="prose dark:prose-invert max-w-none prose-sm">
+                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                      {msg.content || "..."}
+                                    </ReactMarkdown>
+                                    {isChatStreaming && index === chatMessages.length - 1 && msg.role === "assistant" && (
+                                      <span className="inline-block w-2 h-4 bg-primary animate-pulse ml-1" />
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                              <div ref={chatEndRef} />
+                            </div>
+                          )}
+
+                          {/* Chat input */}
+                          <div className="flex gap-2">
+                            <Input
+                              value={chatInput}
+                              onChange={(e) => setChatInput(e.target.value)}
+                              placeholder="Hỏi thêm về kết quả... (VD: Năm nay tôi nên làm gì?)"
+                              className="flex-1"
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" && !e.shiftKey) {
+                                  e.preventDefault();
+                                  handleSendChatMessage();
+                                }
+                              }}
+                              disabled={isChatStreaming}
+                            />
+                            <Button
+                              onClick={handleSendChatMessage}
+                              disabled={!chatInput.trim() || isChatStreaming}
+                            >
+                              {isChatStreaming ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Send className="h-4 w-4" />
+                              )}
+                            </Button>
+                          </div>
+
+                          <p className="text-xs text-muted-foreground">
+                            AI sẽ trả lời dựa trên kết quả luận giải và thông tin tử vi của bạn.
+                          </p>
+                        </CardContent>
+                      </Card>
                     )}
                   </div>
                 )}

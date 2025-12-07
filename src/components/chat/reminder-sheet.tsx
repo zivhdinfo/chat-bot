@@ -382,7 +382,7 @@ export function ReminderSheet({
                                 <AlertDialogHeader>
                                   <AlertDialogTitle>Xóa lịch nhắc?</AlertDialogTitle>
                                   <AlertDialogDescription>
-                                    Bạn có chắc chắn muốn xóa lịch nhắc "{reminder.subject}"? 
+                                    Bạn có chắc chắn muốn xóa lịch nhắc &quot;{reminder.subject}&quot;? 
                                     Hành động này không thể hoàn tác.
                                   </AlertDialogDescription>
                                 </AlertDialogHeader>
@@ -556,7 +556,7 @@ export function ReminderSheet({
                                 <AlertDialogHeader>
                                   <AlertDialogTitle>Xóa lịch nhắc?</AlertDialogTitle>
                                   <AlertDialogDescription>
-                                    Bạn có chắc chắn muốn xóa lịch nhắc "{reminder.subject}"? 
+                                    Bạn có chắc chắn muốn xóa lịch nhắc &quot;{reminder.subject}&quot;? 
                                     Hành động này không thể hoàn tác.
                                   </AlertDialogDescription>
                                 </AlertDialogHeader>

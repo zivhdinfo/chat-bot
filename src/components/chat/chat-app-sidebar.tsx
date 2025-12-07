@@ -30,8 +30,11 @@ import {
   Trash2,
   Bot,
   Clock,
-  Settings
+  Settings,
+  Sparkles,
+  Compass
 } from "lucide-react";
+import Link from "next/link";
 import { ChatSession } from "@/types/chat";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -215,6 +218,24 @@ export function ChatAppSidebar({
       </SidebarHeader>
       
       <SidebarContent>
+        {/* Features Navigation */}
+        <SidebarGroup>
+          <SidebarGroupLabel>Tính năng</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild>
+                  <Link href="/tuvi" className="flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-amber-500" />
+                    <span>Luận Giải Tử Vi</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        {/* Chat Sessions */}
         {renderSessionGroup("Hôm nay", groupedSessions.today)}
         {renderSessionGroup("Hôm qua", groupedSessions.yesterday)}
         {renderSessionGroup("Tuần trước", groupedSessions.lastWeek)}
